@@ -140,6 +140,35 @@ describe("runSync", () => {
 		assert.deepEqual(reloaded.sync.added, []);
 	});
 
+	it("keeps tracking models it added after they show up in the catalog", async () => {
+		const agentDir = tempAgentDir();
+		const upstreamFor = (models: UpstreamModel[]) => async () => models;
+
+		// Run 1: the model is unknown to Pi, so the plugin adds it and records ownership.
+		await runSync({ agentDir, registry: fakeRegistry([]), fetchModels: upstreamFor([newUpstream]) });
+		assert.deepEqual(loadConfig(agentDir).sync.added, ["brand/new-model"]);
+
+		// Run 2: the model is now in the catalog; ownership must survive the catalog catching up.
+		const known: CatalogModel = {
+			id: "brand/new-model",
+			provider: "openrouter",
+			name: "Brand New Model",
+			input: ["text"],
+			reasoning: false,
+			contextWindow: 400_000,
+			maxTokens: 20_000,
+			cost: { input: 0.5, output: 1.5 },
+		};
+		await runSync({ agentDir, registry: fakeRegistry([known]), fetchModels: upstreamFor([newUpstream]) });
+		assert.deepEqual(loadConfig(agentDir).sync.added, ["brand/new-model"]);
+
+		// Run 3: upstream drops it, so the plugin's own entry is pruned.
+		const result = await runSync({ agentDir, registry: fakeRegistry([known]), fetchModels: upstreamFor([knownUpstream]) });
+		assert.deepEqual(result.removed, ["brand/new-model"]);
+		assert.deepEqual(readModelsJson(agentDir).providers?.openrouter?.models?.map((model) => model.id), ["known/model"]);
+		assert.deepEqual(loadConfig(agentDir).sync.added, ["known/model"]);
+	});
+
 	it("leaves hand-written overrides alone, even when they already match upstream", async () => {
 		const agentDir = tempAgentDir();
 		writeModelsJson(agentDir, {

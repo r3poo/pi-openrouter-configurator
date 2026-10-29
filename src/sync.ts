@@ -137,7 +137,22 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 		}
 	}
 
+	// Ownership is a manifest, not a heuristic: entries recorded in the config stay ours even
+	// once they show up in the catalog, so a later sync can still refresh or prune them.
+	const nextAdded = new Set([
+		...config.sync.added.filter((id) => section.models?.some((entry) => entry.id === id) ?? false),
+		...added,
+	]);
+	const nextOverrides = new Set([
+		...config.sync.overrides.filter((id) => section.modelOverrides?.[id] !== undefined),
+		...overrides,
+	]);
+
 	const removed = pruneStale(section, config, seen);
+	for (const id of removed) {
+		nextAdded.delete(id);
+		nextOverrides.delete(id);
+	}
 
 	if (!deepEqual(before, file)) writeModelsJson(options.agentDir, file);
 
@@ -145,8 +160,8 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 		...config,
 		sync: {
 			lastRunAt: new Date(now).toISOString(),
-			added,
-			overrides,
+			added: [...nextAdded],
+			overrides: [...nextOverrides],
 		},
 	};
 	saveConfig(options.agentDir, nextConfig);
