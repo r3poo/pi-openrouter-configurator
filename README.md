@@ -84,9 +84,9 @@ OpenRouter drops every endpoint that cannot honor the requested `max_tokens` **b
 The extension therefore clamps the request budget to a value the configured providers accept:
 
 - `order` and `only` → the smallest budget across the listed providers (131,072 above). Every listed provider accepts that value, so the head of an `order` chain keeps priority *and* the later providers stay usable as fallbacks; clamping to the head's own budget would silently drop every lower-cap provider behind it.
-- `ignore` → untouched; the remaining pool is OpenRouter's choice, and removing providers cannot rescue a budget no remaining provider accepts.
+- `ignore` → the smallest budget among the *surviving* endpoints, ignoring outliers below 1/8 of the pool's best budget (so one weak provider can't shrink every response to its own cap). The pool is every endpoint OpenRouter reports for the model, minus the ignored slugs; `deepinfra` also excludes `deepinfra/fp8/priority`.
 
-Per-provider budgets come from `GET /v1/models/{author}/{slug}/endpoints` (`max_completion_tokens`) and are stored as `caps` next to the route, refreshed whenever you save the route in `/openrouter-routing` and backfilled at startup for hand-written entries.
+Per-provider budgets come from `GET /v1/models/{author}/{slug}/endpoints` (`max_completion_tokens`) and are stored as `caps` next to the route — the listed providers for `order`/`only`, the whole endpoint pool for `ignore`. They are refreshed whenever you save the route in `/openrouter-routing` and backfilled at startup for hand-written entries. A request for a route that has no snapshot yet waits for that backfill (one endpoint fetch) instead of racing it, so the very first message of a session is already clamped.
 
 ## Catalog sync
 

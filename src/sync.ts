@@ -3,6 +3,7 @@ import { deepEqual, openRouterSection, readModelsJson, writeModelsJson, type Mod
 import {
 	computeOverrides,
 	desiredFromUpstream,
+	endpointCaps,
 	fetchModelProviders,
 	fetchUpstreamModels,
 	OPENROUTER_API_BASE,
@@ -11,7 +12,7 @@ import {
 	type ProviderOption,
 	type UpstreamModel,
 } from "./openrouter.ts";
-import type { CatalogModel, PluginConfig, SyncResult } from "./types.ts";
+import type { CatalogModel, ModelRouting, PluginConfig, SyncResult } from "./types.ts";
 
 /** Pi's provider id for OpenRouter models. */
 export const PROVIDER_ID = "openrouter";
@@ -208,6 +209,28 @@ export interface CapRefreshOptions {
 	fetchProviders?: (modelId: string) => Promise<ProviderOption[]>;
 }
 
+/** True when a route cannot be clamped from its snapshot yet. */
+export function needsCaps(routing: ModelRouting): boolean {
+	if (routing.providers.length === 0) return false;
+	// `ignore` clamps against the whole surviving pool, so it needs a snapshot of every endpoint.
+	if (routing.mode === "ignore") return Object.keys(routing.caps ?? {}).length === 0;
+	return routing.providers.some((provider) => routing.caps?.[provider] === undefined);
+}
+
+/** Snapshot the budgets a route needs: every endpoint for `ignore`, the listed ones otherwise. */
+function capsFor(routing: ModelRouting, providers: readonly ProviderOption[]): Record<string, number> | undefined {
+	if (routing.mode === "ignore") {
+		const pool = endpointCaps(providers);
+		return Object.keys(pool).length > 0 ? pool : undefined;
+	}
+	const caps: Record<string, number> = {};
+	for (const provider of routing.providers) {
+		const cap = providers.find((entry) => entry.slug === providerSlug(provider))?.maxCompletionTokens;
+		if (cap !== undefined) caps[provider] = cap;
+	}
+	return Object.keys(caps).length > 0 ? caps : undefined;
+}
+
 /**
  * Backfill completion budgets for routing configs written before caps existed (or hand-written
  * ones without them). Without caps a request cannot tell that its budget excludes the providers
@@ -219,21 +242,15 @@ export async function refreshRoutingCaps(options: CapRefreshOptions): Promise<nu
 	let updated = 0;
 
 	for (const [modelId, routing] of Object.entries(config.routing)) {
-		if (routing.mode === "ignore" || routing.providers.length === 0) continue;
-		const missing = routing.providers.some((provider) => routing.caps?.[provider] === undefined);
-		if (!missing) continue;
+		if (!needsCaps(routing)) continue;
 		let providers: ProviderOption[];
 		try {
 			providers = await fetchProviders(modelId);
 		} catch {
 			continue;
 		}
-		const caps = { ...routing.caps };
-		for (const provider of routing.providers) {
-			const cap = providers.find((entry) => entry.slug === providerSlug(provider))?.maxCompletionTokens;
-			if (cap !== undefined) caps[provider] = cap;
-		}
-		if (Object.keys(caps).length === 0) continue;
+		const caps = capsFor(routing, providers);
+		if (!caps) continue;
 		config.routing[modelId] = { ...routing, caps };
 		updated += 1;
 	}

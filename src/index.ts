@@ -1,10 +1,10 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, saveConfig, setRouting } from "./config.ts";
 import { compactTokens, pickModel, pickMode, pickProviders } from "./menu.ts";
-import { fetchModelProviders } from "./openrouter.ts";
+import { endpointCaps, fetchModelProviders } from "./openrouter.ts";
 import { budgetCap, describeRouting, routingPayload } from "./routing.ts";
-import { isSyncDue, openRouterCatalog, PROVIDER_ID, refreshRoutingCaps, runSync } from "./sync.ts";
-import type { PluginConfig, SyncResult } from "./types.ts";
+import { isSyncDue, needsCaps, openRouterCatalog, PROVIDER_ID, refreshRoutingCaps, runSync } from "./sync.ts";
+import type { ModelRouting, PluginConfig, SyncResult } from "./types.ts";
 
 /** OpenRouter's sticky-routing key header; the body field of the same name wins if both are set. */
 export const SESSION_ID_HEADER = "x-session-id";
@@ -14,6 +14,27 @@ export const TITLE_VALUE = "Pi Agent";
 
 function isOpenRouterModel(ctx: { model: { provider: string } | undefined }): boolean {
 	return ctx.model?.provider === PROVIDER_ID;
+}
+
+/** The startup cap backfill, shared so a request can wait for it instead of racing it. */
+let capsRefresh: Promise<void> | undefined;
+
+/**
+ * The model's routing, with completion budgets filled in.
+ *
+ * A route saved by an older version (or hand-written) has no `caps`, and clamping is a no-op
+ * without them — the first request of such a session would silently misroute. Waiting for the
+ * startup backfill costs one endpoint fetch and only happens until the snapshot exists.
+ */
+async function routingWithCaps(agentDir: string, modelId: string): Promise<ModelRouting | undefined> {
+	const routing = loadConfig(agentDir).routing[modelId];
+	if (!routing || !needsCaps(routing)) return routing;
+	capsRefresh ??= refreshRoutingCaps({ agentDir }).then(
+		() => undefined,
+		() => undefined,
+	);
+	await capsRefresh;
+	return loadConfig(agentDir).routing[modelId] ?? routing;
 }
 
 /** Session name when the user set one, otherwise Pi's session id. OpenRouter caps this at 256 chars. */
@@ -83,7 +104,9 @@ async function handleRoutingCommand(_args: string, ctx: ExtensionCommandContext)
 	const selection = await pickProviders(ctx.ui, mode, providers, current?.providers ?? []);
 	if (selection === undefined) return;
 
-	const { providers: selected, caps } = selection;
+	const { providers: selected, caps: listedCaps } = selection;
+	// `ignore` is clamped against the whole surviving pool, not just the excluded providers.
+	const caps = mode === "ignore" ? endpointCaps(providers) : listedCaps;
 	const routing =
 		selected.length > 0
 			? { mode, providers: selected, ...(Object.keys(caps).length > 0 ? { caps } : {}) }
@@ -98,8 +121,9 @@ async function handleRoutingCommand(_args: string, ctx: ExtensionCommandContext)
 	const maxTokens = ctx.modelRegistry.getAll().find((entry) => entry.provider === PROVIDER_ID && entry.id === modelId)?.maxTokens;
 	const cap = budgetCap(routing, maxTokens);
 	if (cap !== undefined) {
+		const pool = mode === "ignore" ? "the providers that survive" : selected.join(", ");
 		ctx.ui.notify(
-			`${modelId}: output capped at ${compactTokens(cap)} tokens per request — ${selected.join(", ")} cannot accept ${compactTokens(maxTokens ?? 0)} and would otherwise be skipped.`,
+			`${modelId}: output capped at ${compactTokens(cap)} tokens per request — ${pool} cannot accept ${compactTokens(maxTokens ?? 0)} and would otherwise be skipped.`,
 			"info",
 		);
 	}
@@ -135,18 +159,19 @@ export default function openRouterConfigurator(pi: ExtensionAPI): void {
 	});
 
 	// Upstream provider selection: OpenRouter reads `provider` from the request body.
-	pi.on("before_provider_request", (event, ctx) => {
+	pi.on("before_provider_request", async (event, ctx) => {
 		if (!isOpenRouterModel(ctx)) return;
 		const body = event.payload as { model?: unknown; provider?: unknown } | undefined;
 		const modelId = typeof body?.model === "string" ? body.model : ctx.model?.id;
 		if (!body || !modelId) return;
-		const config = loadConfig(getAgentDir()).routing[modelId];
-		const provider = routingPayload(config);
+		const agentDir = getAgentDir();
+		const routing = await routingWithCaps(agentDir, modelId);
+		const provider = routingPayload(routing);
 		if (provider) body.provider = provider;
 		// Keep the routing eligible: OpenRouter drops providers that cannot honor the requested budget.
 		const fields = body as { max_completion_tokens?: unknown; max_tokens?: unknown };
 		const requested = typeof fields.max_completion_tokens === "number" ? fields.max_completion_tokens : fields.max_tokens;
-		const cap = budgetCap(config, typeof requested === "number" ? requested : undefined);
+		const cap = budgetCap(routing, typeof requested === "number" ? requested : undefined);
 		if (cap !== undefined) {
 			if (typeof fields.max_completion_tokens === "number") fields.max_completion_tokens = cap;
 			if (typeof fields.max_tokens === "number") fields.max_tokens = cap;
@@ -158,8 +183,12 @@ export default function openRouterConfigurator(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const agentDir = getAgentDir();
 		const config = loadConfig(agentDir);
-		// Never block startup on the network; both tasks are fire-and-forget.
-		void refreshRoutingCaps({ agentDir, config }).catch(() => undefined);
+		// Never block startup on the network; both tasks are fire-and-forget. Requests that need the
+		// snapshot await the same promise instead of racing it (see `routingWithCaps`).
+		capsRefresh = refreshRoutingCaps({ agentDir, config }).then(
+			() => undefined,
+			() => undefined,
+		);
 		if (!isSyncDue(config)) return;
 		void runSync({ agentDir, registry: ctx.modelRegistry, config }).then((result) => {
 			if (!result.ok) ctx.ui.notify(summarize(result), "warning");

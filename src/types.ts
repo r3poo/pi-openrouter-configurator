@@ -10,6 +10,8 @@ export interface ModelRouting {
 	 * Completion budget each provider accepts, snapshotted from `/models/{id}/endpoints` when the
 	 * routing was saved. OpenRouter drops endpoints that cannot honor `max_tokens`, which silently
 	 * overrides `order`; the snapshot lets the request clamp the budget so the routing holds.
+	 * Keyed by base provider slug; `order`/`only` only need their listed providers, while `ignore`
+	 * snapshots the whole endpoint pool because its clamp applies to whatever survives.
 	 */
 	caps?: Record<string, number>;
 }

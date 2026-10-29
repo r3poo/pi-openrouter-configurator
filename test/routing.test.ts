@@ -40,11 +40,10 @@ describe("budgetCap", () => {
 		assert.equal(budgetCap(ordered, 128_000), undefined);
 	});
 
-	it("never clamps without caps, without a request budget, or for ignore", () => {
+	it("never clamps without caps or without a request budget", () => {
 		assert.equal(budgetCap({ mode: "order", providers: ["deepseek"] }, 943_718), undefined);
 		assert.equal(budgetCap({ ...ordered, caps: {} }, 943_718), undefined);
 		assert.equal(budgetCap(ordered, undefined), undefined);
-		assert.equal(budgetCap({ ...ordered, mode: "ignore" }, 943_718), undefined);
 	});
 
 	it("ignores caps of providers that are not configured", () => {
@@ -52,6 +51,39 @@ describe("budgetCap", () => {
 		assert.equal(budgetCap({ ...ordered, providers: ["unknown", "deepseek"] }, 943_718), 393_216);
 		// An unknown provider cannot tighten the clamp, so it also cannot exclude the others.
 		assert.equal(budgetCap({ ...ordered, providers: ["unknown", "deepseek"] }, 393_216), undefined);
+	});
+});
+
+describe("budgetCap for ignore", () => {
+	const pool: ModelRouting = {
+		mode: "ignore",
+		providers: ["morph"],
+		caps: { morph: 943_718, deepseek: 393_216, deepinfra: 131_072 },
+	};
+
+	it("clamps to the tightest surviving provider", () => {
+		assert.equal(budgetCap(pool, 943_718), 131_072);
+	});
+
+	it("ignores outliers below an eighth of the pool's best budget", () => {
+		// 943,718 / 8 = 117,965, so a 4,096 endpoint is left to be filtered out instead of
+		// shrinking every response in the pool to 4,096 tokens.
+		const withOutlier = { ...pool, caps: { ...pool.caps, venice: 4_096 } };
+		assert.equal(budgetCap(withOutlier, 943_718), 131_072);
+	});
+
+	it("matches ignored providers by base slug", () => {
+		const variant: ModelRouting = {
+			mode: "ignore",
+			providers: ["deepinfra/fp8/priority"],
+			caps: { deepinfra: 131_072, deepseek: 393_216 },
+		};
+		assert.equal(budgetCap(variant, 943_718), 393_216);
+	});
+
+	it("leaves the budget alone when every provider is ignored", () => {
+		const all = { ...pool, providers: ["morph", "deepseek", "deepinfra"] };
+		assert.equal(budgetCap(all, 943_718), undefined);
 	});
 });
 

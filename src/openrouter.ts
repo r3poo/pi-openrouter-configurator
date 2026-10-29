@@ -131,6 +131,19 @@ export async function fetchModelProviders(modelId: string, options: FetchOptions
 }
 
 /** OpenRouter prices are USD per token; Pi stores USD per million tokens. */
+/**
+ * Completion budget per provider slug for a whole endpoint list, keyed the way routing entries
+ * are (`deepinfra`, not `deepinfra/fp8/priority`). Used to clamp `ignore` routes, whose pool is
+ * every endpoint OpenRouter knows about rather than a list the user wrote.
+ */
+export function endpointCaps(providers: readonly ProviderOption[]): Record<string, number> {
+	const caps: Record<string, number> = {};
+	for (const provider of providers) {
+		if (provider.maxCompletionTokens !== undefined) caps[provider.slug] = provider.maxCompletionTokens;
+	}
+	return caps;
+}
+
 export function perMillion(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = Number(value);
