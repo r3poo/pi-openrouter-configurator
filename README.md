@@ -91,4 +91,4 @@ pnpm typecheck
 pnpm test
 ```
 
-`tsconfig.json` maps `@earendil-works/*` to the installed Pi release (`~/.pi/agent/install/releases/<version>/node_modules/...`). Update those paths after a Pi upgrade. At runtime Pi provides these modules itself; they are not bundled.
+The Pi packages are declared the same way the published extensions declare them: `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` as optional `peerDependencies` (Pi supplies them at runtime, nothing is bundled), plus matching `devDependencies` so `pnpm typecheck` resolves their types from npm without path mapping. If pnpm stops on `ERR_PNPM_IGNORED_BUILDS`, run `pnpm approve-builds --all` once.
