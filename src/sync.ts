@@ -3,9 +3,12 @@ import { deepEqual, openRouterSection, readModelsJson, writeModelsJson, type Mod
 import {
 	computeOverrides,
 	desiredFromUpstream,
+	fetchModelProviders,
 	fetchUpstreamModels,
 	OPENROUTER_API_BASE,
+	providerSlug,
 	toModelsJsonDefinition,
+	type ProviderOption,
 	type UpstreamModel,
 } from "./openrouter.ts";
 import type { CatalogModel, PluginConfig, SyncResult } from "./types.ts";
@@ -197,4 +200,44 @@ function pruneStale(section: { models?: { id: string }[]; modelOverrides?: Recor
 	for (const id of staleModels) removed.push(id);
 	for (const id of staleOverrides) if (!staleModels.has(id)) removed.push(id);
 	return removed;
+}
+
+export interface CapRefreshOptions {
+	agentDir: string;
+	config?: PluginConfig;
+	fetchProviders?: (modelId: string) => Promise<ProviderOption[]>;
+}
+
+/**
+ * Backfill completion budgets for routing configs written before caps existed (or hand-written
+ * ones without them). Without caps a request cannot tell that its budget excludes the providers
+ * the user chose, and OpenRouter silently routes elsewhere.
+ */
+export async function refreshRoutingCaps(options: CapRefreshOptions): Promise<number> {
+	const config = options.config ?? loadConfig(options.agentDir);
+	const fetchProviders = options.fetchProviders ?? ((modelId: string) => fetchModelProviders(modelId));
+	let updated = 0;
+
+	for (const [modelId, routing] of Object.entries(config.routing)) {
+		if (routing.mode === "ignore" || routing.providers.length === 0) continue;
+		const missing = routing.providers.some((provider) => routing.caps?.[provider] === undefined);
+		if (!missing) continue;
+		let providers: ProviderOption[];
+		try {
+			providers = await fetchProviders(modelId);
+		} catch {
+			continue;
+		}
+		const caps = { ...routing.caps };
+		for (const provider of routing.providers) {
+			const cap = providers.find((entry) => entry.slug === providerSlug(provider))?.maxCompletionTokens;
+			if (cap !== undefined) caps[provider] = cap;
+		}
+		if (Object.keys(caps).length === 0) continue;
+		config.routing[modelId] = { ...routing, caps };
+		updated += 1;
+	}
+
+	if (updated > 0) saveConfig(options.agentDir, config);
+	return updated;
 }

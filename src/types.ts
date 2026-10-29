@@ -6,6 +6,12 @@ export interface ModelRouting {
 	mode: RoutingMode;
 	/** Provider slugs, in priority order for `order`. */
 	providers: string[];
+	/**
+	 * Completion budget each provider accepts, snapshotted from `/models/{id}/endpoints` when the
+	 * routing was saved. OpenRouter drops endpoints that cannot honor `max_tokens`, which silently
+	 * overrides `order`; the snapshot lets the request clamp the budget so the routing holds.
+	 */
+	caps?: Record<string, number>;
 }
 
 /** Bookkeeping for the catalog sync so it can tell "our" models.json entries from the user's. */

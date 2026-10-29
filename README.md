@@ -44,6 +44,11 @@ The provider picker fetches live endpoint data from `GET /v1/models/{author}/{sl
   "version": 1,
   "routing": {
     "anthropic/claude-sonnet-4.6": { "mode": "order", "providers": ["anthropic", "google"] },
+    "deepseek/deepseek-v4.1-flash-1017": {
+      "mode": "order",
+      "providers": ["deepseek", "deepinfra/fp8/priority"],
+      "caps": { "deepseek": 393216, "deepinfra/fp8/priority": 131072 }
+    },
     "openai/gpt-5": { "mode": "ignore", "providers": ["azure"] }
   },
   "sync": {
@@ -71,6 +76,18 @@ body.provider = { order: [...] } | { only: [...] } | { ignore: [...] };
 ```
 
 Sticky routing only activates when OpenRouter sees `session_id`/`x-session-id`; without it, OpenRouter falls back to hashing the opening messages.
+
+### Routing-safe completion budgets
+
+OpenRouter drops every endpoint that cannot honor the requested `max_tokens` **before** it applies `provider.order`/`only`, and when the whole list is filtered it silently routes to a provider you excluded. For `deepseek/deepseek-v4.1-flash-1017` Pi asks for 943,718 tokens (the largest budget of any endpoint — Morph); DeepSeek caps at 393,216 and DeepInfra at 131,072, so both were eliminated and requests landed on **Morph** despite `order: [deepseek, deepinfra]`.
+
+The extension therefore clamps the request budget to a value the configured providers accept:
+
+- `order` → the first listed provider that reports a budget (393,216 above, which is also what makes DeepSeek win).
+- `only` → the smallest budget in the pool, so no pool member is dropped.
+- `ignore` → untouched; the remaining pool is OpenRouter's choice, and removing providers cannot rescue a budget no remaining provider accepts.
+
+Per-provider budgets come from `GET /v1/models/{author}/{slug}/endpoints` (`max_completion_tokens`) and are stored as `caps` next to the route, refreshed whenever you save the route in `/openrouter-routing` and backfilled at startup for hand-written entries.
 
 ## Catalog sync
 

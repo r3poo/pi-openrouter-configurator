@@ -15,7 +15,7 @@ import {
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { ProviderOption } from "./openrouter.ts";
+import { providerSlug, type ProviderOption } from "./openrouter.ts";
 import type { RoutingMode } from "./types.ts";
 
 const LIST_LAYOUT = { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 56 };
@@ -103,7 +103,7 @@ class ProviderPicker extends Container {
 	private list: SelectList;
 	private listIndex = 0;
 	private order: string[];
-	onDone: (providers: string[]) => void = () => {};
+	onDone: (providers: string[], caps: Record<string, number>) => void = () => {};
 	onCancel: () => void = () => {};
 
 	constructor(
@@ -113,11 +113,14 @@ class ProviderPicker extends Container {
 		theme: Theme,
 	) {
 		super();
+		const known = new Set(providers.map((provider) => provider.slug));
+		// Older configs stored endpoint tags; routing accepts either, the menu works in slugs.
+		const normalized = initial.map((entry) => (known.has(entry) ? entry : providerSlug(entry)));
+		this.order = [...new Set(normalized)];
 		// Keep configured providers that the endpoints API no longer lists so a save cannot silently drop them.
-		const known = new Set(providers.map((provider) => provider.tag));
-		this.order = [...initial];
-		for (const tag of initial) if (!known.has(tag)) this.providers.push({ tag, name: `${tag} (unavailable)` });
-
+		for (const slug of this.order) {
+			if (!known.has(slug)) providers.push({ slug, name: `${slug} (unavailable)` });
+		}
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("accent", theme.bold(`OpenRouter routing — ${MODE_TITLES[mode]}`)), 0, 0));
@@ -132,27 +135,43 @@ class ProviderPicker extends Container {
 	}
 
 	private labelFor(provider: ProviderOption): string {
-		const position = this.order.indexOf(provider.tag);
+		const position = this.order.indexOf(provider.slug);
 		const included = position !== -1;
 		const mark = !included ? "  " : this.mode === "order" ? `${position + 1}.` : this.mode === "only" ? "✓" : "✕";
-		return `${mark} ${provider.name} · ${provider.tag}`;
+		return `${mark} ${provider.name}`;
 	}
 
 	private descriptionFor(provider: ProviderOption): string | undefined {
-		const parts: string[] = [];
+		const parts = [provider.slug];
 		if (provider.uptime !== undefined) parts.push(`${provider.uptime.toFixed(1)}% uptime`);
 		if (provider.promptPricePerMillion !== undefined) parts.push(`$${provider.promptPricePerMillion}/M in`);
-		return parts.length > 0 ? parts.join(" · ") : undefined;
+		if (provider.maxCompletionTokens !== undefined) parts.push(`max ${compactTokens(provider.maxCompletionTokens)} out`);
+		return parts.join(" · ");
+	}
+
+	/** Completion budgets for the selected providers, so a request can stay inside their limits. */
+	private capsFor(selected: string[]): Record<string, number> {
+		if (this.mode === "ignore") return {};
+		const caps: Record<string, number> = {};
+		for (const slug of selected) {
+			const cap = this.providers.find((provider) => provider.slug === slug)?.maxCompletionTokens;
+			if (cap !== undefined) caps[slug] = cap;
+		}
+		return caps;
+	}
+
+	private finish(): void {
+		this.onDone(this.order, this.capsFor(this.order));
 	}
 
 	private buildList(): SelectList {
 		const items: SelectItem[] = this.providers.map((provider) => ({
-			value: provider.tag,
+			value: provider.slug,
 			label: this.labelFor(provider),
 			description: this.descriptionFor(provider),
 		}));
 		const list = new SelectList(items, Math.min(MAX_VISIBLE, Math.max(1, items.length)), getSelectListTheme(), LIST_LAYOUT);
-		list.onSelect = () => this.onDone(this.order);
+		list.onSelect = () => this.finish();
 		list.onCancel = () => this.onCancel();
 		return list;
 	}
@@ -160,22 +179,22 @@ class ProviderPicker extends Container {
 	private rebuild(): void {
 		const selected = this.list.getSelectedItem()?.value;
 		const list = this.buildList();
-		const index = this.providers.findIndex((provider) => provider.tag === selected);
+		const index = this.providers.findIndex((provider) => provider.slug === selected);
 		if (index > 0) list.setSelectedIndex(index);
 		this.children[this.listIndex] = list;
 		this.list = list;
 	}
 
 	private move(direction: -1 | 1): void {
-		const tag = this.list.getSelectedItem()?.value;
-		if (!tag) return;
-		const from = this.order.indexOf(tag);
+		const slug = this.list.getSelectedItem()?.value;
+		if (!slug) return;
+		const from = this.order.indexOf(slug);
 		if (from === -1) return;
 		const to = from + direction;
 		if (to < 0 || to >= this.order.length) return;
 		const next = [...this.order];
 		next.splice(from, 1);
-		next.splice(to, 0, tag);
+		next.splice(to, 0, slug);
 		this.order = next;
 		this.rebuild();
 	}
@@ -187,13 +206,13 @@ class ProviderPicker extends Container {
 			return;
 		}
 		if (kb.matches(keyData, "tui.select.confirm")) {
-			this.onDone(this.order);
+			this.finish();
 			return;
 		}
 		if (keyData === " ") {
-			const tag = this.list.getSelectedItem()?.value;
-			if (!tag) return;
-			this.order = this.order.includes(tag) ? this.order.filter((item) => item !== tag) : [...this.order, tag];
+			const slug = this.list.getSelectedItem()?.value;
+			if (!slug) return;
+			this.order = this.order.includes(slug) ? this.order.filter((item) => item !== slug) : [...this.order, slug];
 			this.rebuild();
 			return;
 		}
@@ -204,6 +223,13 @@ class ProviderPicker extends Container {
 		super.invalidate();
 		this.list.invalidate();
 	}
+}
+
+/** 943718 → "943.7K"; keeps provider limits readable in a one-line description. */
+export function compactTokens(tokens: number): string {
+	if (tokens < 1000) return `${tokens}`;
+	if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}K`;
+	return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 const MODE_TITLES: Record<RoutingMode, string> = {
@@ -261,17 +287,23 @@ export function pickMode(ui: PickUi, current?: RoutingMode): Promise<RoutingMode
 	});
 }
 
-/** Step 3: choose providers for `mode`. Returns `[]` when the user clears the selection. */
+export interface ProviderSelection {
+	providers: string[];
+	/** Completion budget per selected provider, empty for `ignore`. */
+	caps: Record<string, number>;
+}
+
+/** Step 3: choose providers for `mode`. Returns an empty list when the user clears the selection. */
 export function pickProviders(
 	ui: PickUi,
 	mode: RoutingMode,
 	providers: ProviderOption[],
 	initial: string[],
-): Promise<string[] | undefined> {
+): Promise<ProviderSelection | undefined> {
 	if (providers.length === 0) return Promise.resolve(undefined);
-	return ui.custom<string[] | undefined>((_tui, theme, _keybindings, done) => {
+	return ui.custom<ProviderSelection | undefined>((_tui, theme, _keybindings, done) => {
 		const picker = new ProviderPicker(mode, [...providers], initial, theme);
-		picker.onDone = (selected) => done(selected);
+		picker.onDone = (selected, caps) => done({ providers: selected, caps });
 		picker.onCancel = () => done(undefined);
 		return picker;
 	});

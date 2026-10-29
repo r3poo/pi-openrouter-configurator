@@ -72,3 +72,29 @@ describe("saveConfig / loadConfig", () => {
 		assert.ok(readFileSync(configPath(agentDir), "utf8").includes("novita"));
 	});
 });
+
+describe("routing caps", () => {
+	it("round-trips per-provider completion budgets", () => {
+		const config = parseConfig({
+			routing: {
+				"deepseek/deepseek-v4.1-flash-1017": {
+					mode: "order",
+					providers: ["deepseek", "deepinfra"],
+					caps: { deepseek: 393216, deepinfra: 131072 },
+				},
+			},
+		});
+		assert.deepEqual(config.routing["deepseek/deepseek-v4.1-flash-1017"], {
+			mode: "order",
+			providers: ["deepseek", "deepinfra"],
+			caps: { deepseek: 393216, deepinfra: 131072 },
+		});
+	});
+
+	it("drops caps that are not usable numbers", () => {
+		const config = parseConfig({
+			routing: { "a/b": { mode: "only", providers: ["deepinfra"], caps: { deepinfra: 0, other: "big" } } },
+		});
+		assert.deepEqual(config.routing["a/b"], { mode: "only", providers: ["deepinfra"] });
+	});
+});

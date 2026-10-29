@@ -26,7 +26,13 @@ function parseRouting(value: unknown): ModelRouting | undefined {
 		? entry.providers.filter((provider): provider is string => typeof provider === "string" && provider.length > 0)
 		: [];
 	if (providers.length === 0) return undefined;
-	return { mode: entry.mode, providers };
+	const caps: Record<string, number> = {};
+	if (entry.caps && typeof entry.caps === "object") {
+		for (const [slug, value] of Object.entries(entry.caps as Record<string, unknown>)) {
+			if (typeof value === "number" && Number.isFinite(value) && value > 0) caps[slug] = value;
+		}
+	}
+	return Object.keys(caps).length > 0 ? { mode: entry.mode, providers, caps } : { mode: entry.mode, providers };
 }
 
 function parseStringArray(value: unknown): string[] {

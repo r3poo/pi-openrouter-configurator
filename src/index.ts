@@ -1,9 +1,9 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, saveConfig, setRouting } from "./config.ts";
-import { pickModel, pickMode, pickProviders } from "./menu.ts";
+import { compactTokens, pickModel, pickMode, pickProviders } from "./menu.ts";
 import { fetchModelProviders } from "./openrouter.ts";
-import { describeRouting, routingPayload } from "./routing.ts";
-import { isSyncDue, openRouterCatalog, PROVIDER_ID, runSync } from "./sync.ts";
+import { budgetCap, describeRouting, routingPayload } from "./routing.ts";
+import { isSyncDue, openRouterCatalog, PROVIDER_ID, refreshRoutingCaps, runSync } from "./sync.ts";
 import type { PluginConfig, SyncResult } from "./types.ts";
 
 /** OpenRouter's sticky-routing key header; the body field of the same name wins if both are set. */
@@ -80,15 +80,29 @@ async function handleRoutingCommand(_args: string, ctx: ExtensionCommandContext)
 		return;
 	}
 
-	const selected = await pickProviders(ctx.ui, mode, providers, current?.providers ?? []);
-	if (selected === undefined) return;
+	const selection = await pickProviders(ctx.ui, mode, providers, current?.providers ?? []);
+	if (selection === undefined) return;
 
-	setRouting(config, modelId, selected.length > 0 ? { mode, providers: selected } : undefined);
+	const { providers: selected, caps } = selection;
+	const routing =
+		selected.length > 0
+			? { mode, providers: selected, ...(Object.keys(caps).length > 0 ? { caps } : {}) }
+			: undefined;
+	setRouting(config, modelId, routing);
 	saveConfig(agentDir, config);
 	ctx.ui.notify(
 		selected.length > 0 ? `${modelId}: ${mode} ${selected.join(", ")}` : `${modelId}: default OpenRouter routing`,
 		"info",
 	);
+	// OpenRouter drops providers that cannot honor the requested budget, so say what it costs to keep this routing.
+	const maxTokens = ctx.modelRegistry.getAll().find((entry) => entry.provider === PROVIDER_ID && entry.id === modelId)?.maxTokens;
+	const cap = budgetCap(routing, maxTokens);
+	if (cap !== undefined) {
+		ctx.ui.notify(
+			`${modelId}: output capped at ${compactTokens(cap)} tokens per request — ${selected.join(", ")} cannot accept ${compactTokens(maxTokens ?? 0)} and would otherwise be skipped.`,
+			"info",
+		);
+	}
 }
 
 function summarize(result: SyncResult): string {
@@ -126,17 +140,28 @@ export default function openRouterConfigurator(pi: ExtensionAPI): void {
 		const body = event.payload as { model?: unknown; provider?: unknown } | undefined;
 		const modelId = typeof body?.model === "string" ? body.model : ctx.model?.id;
 		if (!body || !modelId) return;
-		const routing = routingPayload(loadConfig(getAgentDir()).routing[modelId]);
-		if (routing) body.provider = routing;
+		const config = loadConfig(getAgentDir()).routing[modelId];
+		const provider = routingPayload(config);
+		if (provider) body.provider = provider;
+		// Keep the routing eligible: OpenRouter drops providers that cannot honor the requested budget.
+		const fields = body as { max_completion_tokens?: unknown; max_tokens?: unknown };
+		const requested = typeof fields.max_completion_tokens === "number" ? fields.max_completion_tokens : fields.max_tokens;
+		const cap = budgetCap(config, typeof requested === "number" ? requested : undefined);
+		if (cap !== undefined) {
+			if (typeof fields.max_completion_tokens === "number") fields.max_completion_tokens = cap;
+			if (typeof fields.max_tokens === "number") fields.max_tokens = cap;
+		}
 		// Sticky routing: a stable key makes OpenRouter keep a conversation on one upstream.
 		(body as { session_id?: string }).session_id = sessionId(ctx);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		const config = loadConfig(getAgentDir());
+		const agentDir = getAgentDir();
+		const config = loadConfig(agentDir);
+		// Never block startup on the network; both tasks are fire-and-forget.
+		void refreshRoutingCaps({ agentDir, config }).catch(() => undefined);
 		if (!isSyncDue(config)) return;
-		// Never block startup on the network; the catalog is used on the next request either way.
-		void runSync({ agentDir: getAgentDir(), registry: ctx.modelRegistry, config }).then((result) => {
+		void runSync({ agentDir, registry: ctx.modelRegistry, config }).then((result) => {
 			if (!result.ok) ctx.ui.notify(summarize(result), "warning");
 		});
 	});

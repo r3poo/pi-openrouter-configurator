@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
 	computeOverrides,
 	desiredFromUpstream,
+	fetchModelProviders,
 	perMillion,
+	providerSlug,
 	toModelsJsonDefinition,
 	type UpstreamModel,
 } from "../src/openrouter.ts";
@@ -111,5 +113,49 @@ describe("computeOverrides", () => {
 		const current: CatalogModel = { ...catalogModel, name: desired.name, cost: desired.cost };
 		const overrides = computeOverrides(desired, current, { name: desired.name });
 		assert.deepEqual(overrides, { name: desired.name, contextWindow: 1_000_000, maxTokens: 64_000 });
+	});
+});
+
+describe("providerSlug", () => {
+	it("turns endpoint tags into provider slugs", () => {
+		assert.equal(providerSlug("deepseek"), "deepseek");
+		assert.equal(providerSlug("deepinfra/fp8/priority"), "deepinfra");
+		assert.equal(providerSlug("open-inference/fp4"), "open-inference");
+	});
+});
+
+describe("fetchModelProviders", () => {
+	const body = {
+		data: {
+			endpoints: [
+				{ tag: "morph/fp8", provider_name: "Morph", uptime_last_30m: 99.5, pricing: { prompt: "0.0000002" }, max_completion_tokens: 943718 },
+				{ tag: "deepinfra/fp8", provider_name: "DeepInfra", uptime_last_30m: 97, pricing: { prompt: "0.00000015" }, max_completion_tokens: 131072 },
+				{ tag: "deepinfra/fp8/priority", provider_name: "DeepInfra", uptime_last_30m: 99.9, pricing: { prompt: "0.0000002" }, max_completion_tokens: 131072 },
+				{ tag: "deepseek", provider_name: "DeepSeek", uptime_last_30m: 98, pricing: { prompt: "0.0000003" }, max_completion_tokens: 393216 },
+			],
+		},
+	};
+
+	it("collapses a provider's endpoints into one slug with its best capability", async () => {
+		const providers = await fetchModelProviders("deepseek/deepseek-v4.1-flash-1017", {
+			fetchImpl: (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof fetch,
+		});
+		assert.deepEqual(
+			providers.map((provider) => provider.slug).sort(),
+			["deepinfra", "deepseek", "morph"],
+		);
+		const deepinfra = providers.find((provider) => provider.slug === "deepinfra");
+		assert.equal(deepinfra?.name, "DeepInfra");
+		assert.equal(deepinfra?.maxCompletionTokens, 131_072);
+		assert.equal(deepinfra?.uptime, 99.9);
+		assert.equal(deepinfra?.promptPricePerMillion, 0.15);
+	});
+
+	it("keeps unknown capabilities undefined instead of inventing a limit", async () => {
+		const bare = { data: { endpoints: [{ tag: "reka", provider_name: "Reka" }] } };
+		const providers = await fetchModelProviders("some/model", {
+			fetchImpl: (async () => new Response(JSON.stringify(bare), { status: 200 })) as typeof fetch,
+		});
+		assert.deepEqual(providers, [{ slug: "reka", name: "Reka" }]);
 	});
 });

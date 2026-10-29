@@ -40,12 +40,21 @@ export interface UpstreamEndpoint {
 	pricing?: UpstreamPricing;
 }
 
-/** A provider the user can route to, as offered by the routing menu. */
+/**
+ * A provider the user can route to, as offered by the routing menu.
+ *
+ * OpenRouter identifies providers by slug (`deepinfra`) but lists endpoints by tag
+ * (`deepinfra/fp8/priority`). Routing takes slugs; one provider can serve several tags, so the
+ * menu collapses them into one entry with the best capability across its endpoints.
+ */
 export interface ProviderOption {
-	tag: string;
+	slug: string;
 	name: string;
 	uptime?: number;
+	/** Cheapest prompt price across the provider's endpoints, USD per million tokens. */
 	promptPricePerMillion?: number;
+	/** Largest completion budget any of the provider's endpoints accepts. */
+	maxCompletionTokens?: number;
 }
 
 /** Model metadata derived from the public catalog — the plugin's idea of "current". */
@@ -83,7 +92,13 @@ export async function fetchUpstreamModels(options: FetchOptions = {}): Promise<U
 	return Array.isArray(body.data) ? body.data : [];
 }
 
-/** GET /models/{id}/endpoints — the providers currently serving one model. */
+/** `deepinfra/fp8/priority` → `deepinfra`; a bare tag such as `deepseek` is already a slug. */
+export function providerSlug(tag: string): string {
+	const slash = tag.indexOf("/");
+	return slash === -1 ? tag : tag.slice(0, slash);
+}
+
+/** GET /models/{id}/endpoints — the providers currently serving one model, one entry per slug. */
 export async function fetchModelProviders(modelId: string, options: FetchOptions = {}): Promise<ProviderOption[]> {
 	const base = options.baseUrl ?? OPENROUTER_API_BASE;
 	const body = await getJson<{ data?: { endpoints?: UpstreamEndpoint[] } }>(
@@ -91,19 +106,28 @@ export async function fetchModelProviders(modelId: string, options: FetchOptions
 		options,
 	);
 	const endpoints = body.data?.endpoints ?? [];
-	const seen = new Set<string>();
-	const providers: ProviderOption[] = [];
+	const bySlug = new Map<string, ProviderOption>();
 	for (const endpoint of endpoints) {
-		if (!endpoint.tag || seen.has(endpoint.tag)) continue;
-		seen.add(endpoint.tag);
-		providers.push({
-			tag: endpoint.tag,
-			name: endpoint.provider_name ?? endpoint.tag,
-			uptime: endpoint.uptime_last_30m,
-			promptPricePerMillion: perMillion(endpoint.pricing?.prompt),
-		});
+		if (!endpoint.tag) continue;
+		const slug = providerSlug(endpoint.tag);
+		const existing = bySlug.get(slug);
+		const provider: ProviderOption = existing ?? { slug, name: endpoint.provider_name ?? slug };
+		if (endpoint.provider_name) provider.name = endpoint.provider_name;
+		if (endpoint.uptime_last_30m !== undefined) {
+			provider.uptime = Math.max(existing?.uptime ?? Number.NEGATIVE_INFINITY, endpoint.uptime_last_30m);
+		}
+		const price = perMillion(endpoint.pricing?.prompt);
+		if (price !== undefined) {
+			provider.promptPricePerMillion = Math.min(existing?.promptPricePerMillion ?? Number.POSITIVE_INFINITY, price);
+		}
+		if (endpoint.max_completion_tokens !== undefined && endpoint.max_completion_tokens !== null) {
+			provider.maxCompletionTokens = Math.max(existing?.maxCompletionTokens ?? 0, endpoint.max_completion_tokens);
+		}
+		bySlug.set(slug, provider);
 	}
-	return providers.sort((left, right) => (right.uptime ?? 0) - (left.uptime ?? 0) || left.tag.localeCompare(right.tag));
+	return [...bySlug.values()].sort(
+		(left, right) => (right.uptime ?? 0) - (left.uptime ?? 0) || left.slug.localeCompare(right.slug),
+	);
 }
 
 /** OpenRouter prices are USD per token; Pi stores USD per million tokens. */
