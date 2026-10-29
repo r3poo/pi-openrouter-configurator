@@ -1,0 +1,24 @@
+{
+  "name": "pi-openrouter-configurator",
+  "version": "0.1.0",
+  "description": "OpenRouter provider routing, session headers and model catalog sync for Pi Agent",
+  "type": "module",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
