@@ -20,12 +20,12 @@ describe("routingPayload", () => {
 });
 
 describe("budgetCap", () => {
-	it("clamps an ordered route to its first provider so that provider survives the filter", () => {
+	it("clamps to the tightest provider so every listed provider stays eligible", () => {
 		// DeepSeek rejects >393,216 and DeepInfra >131,072, so Pi's 943,718 budget drops both and
 		// OpenRouter falls back to Morph (verified against the live API).
-		assert.equal(budgetCap(ordered, 943_718), 393_216);
-		// Order is honoured over tightness: a tightest-first clamp would keep DeepInfra eligible
-		// while dropping the provider the user actually wants.
+		assert.equal(budgetCap(ordered, 943_718), 131_072);
+		// Order does not change the clamp: the head keeps priority among eligible providers, and
+		// the tail stays usable as a fallback.
 		assert.equal(budgetCap({ ...ordered, providers: ["deepinfra", "deepseek"] }, 943_718), 131_072);
 	});
 
@@ -33,8 +33,10 @@ describe("budgetCap", () => {
 		assert.equal(budgetCap({ ...ordered, mode: "only" }, 943_718), 131_072);
 	});
 
-	it("leaves budgets the providers can honor alone", () => {
-		assert.equal(budgetCap(ordered, 393_216), undefined);
+	it("leaves budgets the tightest provider can honor alone", () => {
+		// 393,216 is fine for DeepSeek but still excludes DeepInfra, so it gets clamped too.
+		assert.equal(budgetCap(ordered, 393_216), 131_072);
+		assert.equal(budgetCap(ordered, 131_072), undefined);
 		assert.equal(budgetCap(ordered, 128_000), undefined);
 	});
 
@@ -47,16 +49,15 @@ describe("budgetCap", () => {
 
 	it("ignores caps of providers that are not configured", () => {
 		assert.equal(budgetCap({ ...ordered, providers: ["deepinfra"] }, 943_718), 131_072);
-		assert.equal(
-			budgetCap({ ...ordered, providers: ["unknown", "deepseek"] }, 943_718),
-			393_216,
-		);
+		assert.equal(budgetCap({ ...ordered, providers: ["unknown", "deepseek"] }, 943_718), 393_216);
+		// An unknown provider cannot tighten the clamp, so it also cannot exclude the others.
+		assert.equal(budgetCap({ ...ordered, providers: ["unknown", "deepseek"] }, 393_216), undefined);
 	});
 });
 
 describe("describeRouting", () => {
 	it("shows the mode, providers and effective output cap", () => {
-		assert.equal(describeRouting(ordered), "ordered: deepseek, deepinfra (max 393,216 out)");
+		assert.equal(describeRouting(ordered), "ordered: deepseek, deepinfra (max 131,072 out)");
 		assert.equal(describeRouting({ ...ordered, mode: "only" }), "only: deepseek, deepinfra (max 131,072 out)");
 		assert.equal(describeRouting({ mode: "ignore", providers: ["morph"] }), "ignore: morph");
 		assert.equal(describeRouting(undefined), "default routing");
