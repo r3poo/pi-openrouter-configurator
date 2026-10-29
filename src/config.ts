@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DEFAULT_APP, isDefaultAttribution, parseAttribution } from "./attribution.ts";
 import type { ModelRouting, PluginConfig, RoutingMode } from "./types.ts";
 
 export const CONFIG_BASENAME = "openrouter-configurator.json";
@@ -9,7 +10,7 @@ export function configPath(agentDir: string): string {
 }
 
 export function emptyConfig(): PluginConfig {
-	return { version: 1, routing: {}, sync: { added: [], overrides: [] } };
+	return { version: 1, routing: {}, app: DEFAULT_APP, sync: { added: [], overrides: [] } };
 }
 
 const ROUTING_MODES: readonly string[] = ["order", "only", "ignore"];
@@ -52,6 +53,8 @@ export function parseConfig(raw: unknown): PluginConfig {
 		}
 	}
 
+	config.app = parseAttribution(record.app);
+
 	if (record.sync && typeof record.sync === "object") {
 		const sync = record.sync as Record<string, unknown>;
 		if (typeof sync.lastRunAt === "string") config.sync.lastRunAt = sync.lastRunAt;
@@ -75,7 +78,9 @@ export function saveConfig(agentDir: string, config: PluginConfig): void {
 	const path = configPath(agentDir);
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+	// Only persist the app block when it differs from the defaults, keeping the file hand-editable.
+	const serialized = isDefaultAttribution(config.app) ? { ...config, app: undefined } : config;
+	writeFileSync(tmp, `${JSON.stringify(serialized, null, 2)}\n`, "utf8");
 	renameSync(tmp, path);
 }
 

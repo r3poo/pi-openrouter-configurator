@@ -16,6 +16,16 @@ export interface ModelRouting {
 	caps?: Record<string, number>;
 }
 
+/** App attribution OpenRouter shows in its logs ("App" column). */
+export interface AppAttribution {
+	/** Absolute http(s) URL; OpenRouter keys the app by its origin. */
+	referer: string;
+	/** Display name for the app record. */
+	title: string;
+	/** Category labels, sent as a comma-separated list. */
+	categories: string[];
+}
+
 /** Bookkeeping for the catalog sync so it can tell "our" models.json entries from the user's. */
 export interface SyncState {
 	/** ISO timestamp of the last successful sync. */
@@ -30,6 +40,8 @@ export interface PluginConfig {
 	version: 1;
 	/** Keyed by OpenRouter model id, e.g. `anthropic/claude-sonnet-4.6`. */
 	routing: Record<string, ModelRouting>;
+	/** App attribution sent with every OpenRouter request. */
+	app: AppAttribution;
 	sync: SyncState;
 }
 

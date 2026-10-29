@@ -4,7 +4,7 @@ A Pi Agent extension for OpenRouter that the built-in connector does not cover:
 
 - **Per-model upstream routing** — pin a model to an ordered provider list, or restrict/exclude providers.
 - **Sticky sessions** — every OpenRouter request carries a session key so a conversation stays on one upstream provider.
-- **App attribution** — requests report `X-OpenRouter-Title: Pi Agent` (verified against OpenRouter's [app attribution docs](https://openrouter.ai/docs/app-attribution); `X-Title` is the legacy spelling).
+- **App attribution** — requests carry `HTTP-Referer` plus `X-OpenRouter-Title: Pi Agent` (and `X-OpenRouter-Categories`), both configurable. Verified against OpenRouter's [app attribution docs](https://openrouter.ai/docs/app-attribution); `HTTP-Referer`/`X-Title` are the non-prefixed spellings.
 - **Fresh model catalog** — on startup (at most once every 24 h) and on demand, the extension adds OpenRouter models Pi does not know yet and refreshes stale metadata.
 
 ## Install
@@ -51,6 +51,7 @@ The provider picker fetches live endpoint data from `GET /v1/models/{author}/{sl
     },
     "openai/gpt-5": { "mode": "ignore", "providers": ["azure"] }
   },
+  "app": { "referer": "https://pi.dev", "title": "Pi Agent", "categories": ["cli-agent"] },
   "sync": {
     "lastRunAt": "2026-02-02T00:00:00.000Z",
     "added": ["brand/new-model"],
@@ -59,7 +60,21 @@ The provider picker fetches live endpoint data from `GET /v1/models/{author}/{sl
 }
 ```
 
-The file is read on every request, so hand edits take effect without a restart. It is written atomically; a malformed file is treated as empty rather than breaking the extension.
+The file is read on every request, so hand edits take effect without a restart. It is written atomically; a malformed file is treated as empty rather than breaking the extension. The `app` block is omitted from the file while it matches the defaults.
+
+### App attribution (why OpenRouter used to show "Unknown")
+
+Pi's provider config ships `identity.attribution` unset, so Pi sends **no `HTTP-Referer`** — only a title. OpenRouter keys its app records by the *origin* of the referer, so a title alone produces no app record and the request is logged with **App = Unknown**. The extension supplies both halves:
+
+```
+HTTP-Referer: <app.referer>
+X-OpenRouter-Title: <app.title>
+X-OpenRouter-Categories: <app.categories joined by ",">
+```
+
+Defaults are `https://pi.dev` / `Pi Agent` / `cli-agent`, so traffic aggregates under the same origin Pi uses. The **name** OpenRouter shows is the name of the app record for that origin — and a record is named from the first title it ever saw. `https://pi.dev` is already registered as `pi`; set `app.referer` to any URL you control (e.g. `https://example.com/pi`) and the first request creates a record titled with `app.title`. Attribution is applied to `openrouter` models only.
+
+Setting `categories` to `[]` omits the categories header; an invalid `referer` (not an absolute http(s) URL) falls back to the default.
 
 ## What the network calls look like
 
@@ -68,7 +83,9 @@ For `openrouter` models only:
 ```ts
 // before_provider_headers
 headers["x-session-id"] = sessionName ?? sessionId;   // ≤ 256 chars
+headers["HTTP-Referer"] = "https://pi.dev";           // app origin (see App attribution)
 headers["X-OpenRouter-Title"] = "Pi Agent";
+headers["X-OpenRouter-Categories"] = "cli-agent";
 
 // before_provider_request
 body.session_id = sessionName ?? sessionId;           // body wins over the header

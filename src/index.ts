@@ -1,4 +1,5 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { attributionHeaders } from "./attribution.ts";
 import { loadConfig, saveConfig, setRouting } from "./config.ts";
 import { compactTokens, pickModel, pickMode, pickProviders } from "./menu.ts";
 import { endpointCaps, fetchModelProviders } from "./openrouter.ts";
@@ -8,9 +9,7 @@ import type { ModelRouting, PluginConfig, SyncResult } from "./types.ts";
 
 /** OpenRouter's sticky-routing key header; the body field of the same name wins if both are set. */
 export const SESSION_ID_HEADER = "x-session-id";
-/** OpenRouter's app-attribution header (replaces the deprecated `X-Title`). */
-export const TITLE_HEADER = "X-OpenRouter-Title";
-export const TITLE_VALUE = "Pi Agent";
+
 
 function isOpenRouterModel(ctx: { model: { provider: string } | undefined }): boolean {
 	return ctx.model?.provider === PROVIDER_ID;
@@ -155,7 +154,8 @@ export default function openRouterConfigurator(pi: ExtensionAPI): void {
 	pi.on("before_provider_headers", (event, ctx) => {
 		if (!isOpenRouterModel(ctx)) return;
 		event.headers[SESSION_ID_HEADER] = sessionId(ctx);
-		event.headers[TITLE_HEADER] = TITLE_VALUE;
+		// Pi ships no attribution, which leaves OpenRouter showing the app as "Unknown".
+		Object.assign(event.headers, attributionHeaders(loadConfig(getAgentDir()).app));
 	});
 
 	// Upstream provider selection: OpenRouter reads `provider` from the request body.
