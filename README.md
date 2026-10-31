@@ -35,7 +35,7 @@ Routing modes:
 
 In the model picker, typing filters the list and puts the cursor on the best match (so <kbd>enter</kbd> takes it without scrolling); clearing the query returns the cursor to the model the menu opened on.
 
-The provider picker fetches live endpoint data from `GET /v1/models/{author}/{slug}/endpoints`, so it shows the providers actually serving that model.
+The provider picker fetches live endpoint data from `GET /v1/models/{author}/{slug}/endpoints`, so it shows the providers actually serving that model, with 30-minute uptime, prompt price per million tokens and max completion budget in column-aligned cells (units stay in the cells because the description column starts at a width the list decides).
 
 ## Config
 

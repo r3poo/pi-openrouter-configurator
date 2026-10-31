@@ -112,6 +112,7 @@ class ProviderPicker extends Container {
 	private list: SelectList;
 	private listIndex = 0;
 	private order: string[];
+	private readonly widths: SpecWidths;
 	// Plain fields, not constructor parameter properties: Node's strip-only TypeScript (which the test
 	// runner uses) cannot compile parameter properties.
 	private readonly mode: RoutingMode;
@@ -123,6 +124,7 @@ class ProviderPicker extends Container {
 		super();
 		this.mode = mode;
 		this.providers = providers;
+		this.widths = specWidths(providers);
 		const known = new Set(providers.map((provider) => provider.slug));
 		// Older configs stored endpoint tags; routing accepts either, the menu works in slugs.
 		const normalized = initial.map((entry) => (known.has(entry) ? entry : providerSlug(entry)));
@@ -151,12 +153,8 @@ class ProviderPicker extends Container {
 		return `${mark} ${provider.name}`;
 	}
 
-	private descriptionFor(provider: ProviderOption): string | undefined {
-		const parts = [provider.slug];
-		if (provider.uptime !== undefined) parts.push(`${provider.uptime.toFixed(1)}% uptime`);
-		if (provider.promptPricePerMillion !== undefined) parts.push(`$${provider.promptPricePerMillion}/M in`);
-		if (provider.maxCompletionTokens !== undefined) parts.push(`max ${compactTokens(provider.maxCompletionTokens)} out`);
-		return parts.join(" · ");
+	private descriptionFor(provider: ProviderOption): string {
+		return specRow(provider, this.widths);
 	}
 
 	/** Completion budgets for the selected providers, so a request can stay inside their limits. */
@@ -240,6 +238,85 @@ export function compactTokens(tokens: number): string {
 	if (tokens < 1000) return `${tokens}`;
 	if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}K`;
 	return `${(tokens / 1_000_000).toFixed(1)}M`;
+}
+
+export interface SpecWidths {
+	slug: number;
+	uptime: number;
+	price: number;
+	maxOut: number;
+	/** Decimals every price cell in this list uses, so decimal points stack. */
+	precision: number;
+}
+
+/**
+ * One price precision for the whole column: sub-cent models would otherwise round to `$0.00`, while
+ * a fixed number of decimals keeps the digits — and therefore the decimal point — in one place.
+ */
+export function pricePrecision(providers: readonly ProviderOption[]): number {
+	const prices = providers
+		.map((provider) => provider.promptPricePerMillion)
+		.filter((price): price is number => price !== undefined && price > 0);
+	const cheapest = prices.length > 0 ? Math.min(...prices) : 1;
+	if (cheapest >= 0.1) return 2;
+	if (cheapest >= 0.01) return 3;
+	if (cheapest >= 0.001) return 4;
+	return 5;
+}
+
+interface SpecCells {
+	uptime?: string;
+	price?: string;
+	maxOut?: string;
+}
+
+function specCells(provider: ProviderOption, precision: number): SpecCells {
+	return {
+		uptime: provider.uptime === undefined ? undefined : `${provider.uptime.toFixed(1)}% up`,
+		price:
+			provider.promptPricePerMillion === undefined
+				? undefined
+				: provider.promptPricePerMillion === 0
+					? "free"
+					: `$${provider.promptPricePerMillion.toFixed(precision)}/M in`,
+		maxOut:
+			provider.maxCompletionTokens === undefined ? undefined : `max ${compactTokens(provider.maxCompletionTokens)} out`,
+	};
+}
+
+/** Column widths for a provider list, measured over every row so cells do not shift while toggling. */
+export function specWidths(providers: readonly ProviderOption[]): SpecWidths {
+	const precision = pricePrecision(providers);
+	const widths: SpecWidths = { slug: 0, uptime: 0, price: 0, maxOut: 0, precision };
+	for (const provider of providers) {
+		const cells = specCells(provider, precision);
+		widths.slug = Math.max(widths.slug, provider.slug.length);
+		widths.uptime = Math.max(widths.uptime, cells.uptime?.length ?? 0);
+		widths.price = Math.max(widths.price, cells.price?.length ?? 0);
+		widths.maxOut = Math.max(widths.maxOut, cells.maxOut?.length ?? 0);
+	}
+	return widths;
+}
+
+/**
+ * `slug  uptime  price  max-out` with every numeric cell right-aligned, so the figures stack even
+ * when a provider leaves a field unreported. Units live inside the cells (`% up`, `/M in`, `max … out`)
+ * because the description column starts at a width the list decides, so a separate header row could
+ * not be kept in alignment.
+ */
+export function specRow(provider: ProviderOption, widths: SpecWidths): string {
+	const cells = specCells(provider, widths.precision);
+	const slot = (cell: string | undefined, width: number) => (cell ?? "").padStart(width);
+	const parts = [provider.slug.padEnd(widths.slug)];
+	// A column nobody in this list reports collapses instead of leaving a stray separator.
+	for (const [cell, width] of [
+		[cells.uptime, widths.uptime],
+		[cells.price, widths.price],
+		[cells.maxOut, widths.maxOut],
+	] as const) {
+		if (width > 0) parts.push(slot(cell, width));
+	}
+	return parts.join("  ").trimEnd();
 }
 
 const MODE_TITLES: Record<RoutingMode, string> = {
