@@ -33,6 +33,8 @@ Routing modes:
 - `ignore` — the listed providers are excluded from the pool (`provider.ignore`).
 - `default` — removes the model's entry; OpenRouter's default routing applies.
 
+In the model picker, typing filters the list and puts the cursor on the best match (so <kbd>enter</kbd> takes it without scrolling); clearing the query returns the cursor to the model the menu opened on.
+
 The provider picker fetches live endpoint data from `GET /v1/models/{author}/{slug}/endpoints`, so it shows the providers actually serving that model.
 
 ## Config

@@ -30,12 +30,14 @@ class ModelPicker extends Container {
 	private list: SelectList;
 	private readonly allItems: SelectItem[];
 	private listIndex = 0;
+	private readonly preselect: string | undefined;
 	onSelect: (value: string) => void = () => {};
 	onCancel: () => void = () => {};
 
 	constructor(items: SelectItem[], preselect: string | undefined, theme: Theme) {
 		super();
 		this.allItems = items;
+		this.preselect = preselect;
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("accent", theme.bold("OpenRouter routing — model")), 0, 0));
@@ -64,13 +66,20 @@ class ModelPicker extends Container {
 		return list;
 	}
 
+	/** Current selection; used by the caller after the menu resolves, and by tests. */
+	get selection(): string | undefined {
+		return this.list.getSelectedItem()?.value;
+	}
+
 	private refilter(): void {
 		const query = this.input.getValue();
-		const selected = this.list.getSelectedItem()?.value;
 		const items = query
 			? fuzzyFilter(this.allItems, query, (item) => `${item.value} ${item.description ?? ""}`)
 			: this.allItems;
-		const list = this.buildList(items, selected);
+		// A fresh list starts on its first row, so typing puts the cursor on the best match instead of
+		// dragging the old selection around (which also scrolled the view to keep it visible).
+		// Clearing the query returns to the model the menu opened on.
+		const list = this.buildList(items, query ? undefined : this.preselect);
 		this.children[this.listIndex] = list;
 		this.list = list;
 	}
@@ -103,16 +112,17 @@ class ProviderPicker extends Container {
 	private list: SelectList;
 	private listIndex = 0;
 	private order: string[];
+	// Plain fields, not constructor parameter properties: Node's strip-only TypeScript (which the test
+	// runner uses) cannot compile parameter properties.
+	private readonly mode: RoutingMode;
+	private readonly providers: ProviderOption[];
 	onDone: (providers: string[], caps: Record<string, number>) => void = () => {};
 	onCancel: () => void = () => {};
 
-	constructor(
-		private readonly mode: RoutingMode,
-		private readonly providers: ProviderOption[],
-		initial: string[],
-		theme: Theme,
-	) {
+	constructor(mode: RoutingMode, providers: ProviderOption[], initial: string[], theme: Theme) {
 		super();
+		this.mode = mode;
+		this.providers = providers;
 		const known = new Set(providers.map((provider) => provider.slug));
 		// Older configs stored endpoint tags; routing accepts either, the menu works in slugs.
 		const normalized = initial.map((entry) => (known.has(entry) ? entry : providerSlug(entry)));
