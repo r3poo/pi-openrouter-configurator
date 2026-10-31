@@ -4,6 +4,7 @@ import {
 	computeOverrides,
 	desiredFromUpstream,
 	fetchModelProviders,
+	isBatchVariant,
 	perMillion,
 	providerSlug,
 	toModelsJsonDefinition,
@@ -57,6 +58,14 @@ describe("desiredFromUpstream", () => {
 	it("skips models that are not text generators or have no price", () => {
 		assert.equal(desiredFromUpstream({ ...upstream, architecture: { output_modalities: ["image"] } }), undefined);
 		assert.equal(desiredFromUpstream({ ...upstream, pricing: {} }), undefined);
+	});
+
+	it("skips batch variants, which Pi cannot call, but keeps :free", () => {
+		assert.equal(isBatchVariant("openai/gpt-6.1-terra:batch"), true);
+		assert.equal(isBatchVariant("openai/gpt-6.1-terra:free"), false);
+		assert.equal(isBatchVariant("openai/gpt-6.1-terra"), false);
+		assert.equal(desiredFromUpstream({ ...upstream, id: "openai/gpt-6.1-terra:batch" }), undefined);
+		assert.notEqual(desiredFromUpstream({ ...upstream, id: "openai/gpt-6.1-terra:free" }), undefined);
 	});
 });
 

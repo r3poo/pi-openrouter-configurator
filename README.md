@@ -110,6 +110,7 @@ Per-provider budgets come from `GET /v1/models/{author}/{slug}/endpoints` (`max_
 `runSync` fetches `https://openrouter.ai/api/v1/models` and writes `$PI_AGENT_DIR/models.json`:
 
 - **Missing models** are appended under `providers.openrouter.models` with `api: "openai-completions"` and the OpenRouter base URL. Their ids are recorded in `sync.added`.
+- **Batch variants are excluded.** OpenRouter publishes its batch tier as a `:batch` suffix on the same model (`openai/gpt-6.1-terra:batch`), which only accepts asynchronous job submissions — Pi speaks `chat/completions`, so such a model would fail on the first message. They are never added, they are skipped in the `/openrouter-routing` picker even when Pi's built-in catalog lists them, and a sync prunes any that an earlier version (or a hand edit) left in `models.json`. `:free` and other suffixes stay eligible.
 - **Stale metadata** becomes a `providers.openrouter.modelOverrides` entry: modalities are only added (never removed), `contextWindow`/`maxTokens` only increase, and `cost` is rewritten when it differs. Model ids are recorded in `sync.overrides`.
 - **Ownership** — only entries this plugin wrote earlier (`sync.added` / `sync.overrides`) are updated or pruned. A hand-written model or override is never modified, and a sync drops its own override once the built-in catalog has caught up with upstream.
 - The model registry is refreshed afterwards, so new models show up without a restart.

@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { emptyConfig, loadConfig, saveConfig } from "../src/config.ts";
 import { readModelsJson, writeModelsJson } from "../src/models-json.ts";
 import type { UpstreamModel } from "../src/openrouter.ts";
-import { isSyncDue, runSync, SYNC_INTERVAL_MS, type SyncRegistry } from "../src/sync.ts";
+import { isSyncDue, openRouterCatalog, runSync, SYNC_INTERVAL_MS, type SyncRegistry } from "../src/sync.ts";
 import type { CatalogModel } from "../src/types.ts";
 
 const dirs: string[] = [];
@@ -167,6 +167,48 @@ describe("runSync", () => {
 		assert.deepEqual(result.removed, ["brand/new-model"]);
 		assert.deepEqual(readModelsJson(agentDir).providers?.openrouter?.models?.map((model) => model.id), ["known/model"]);
 		assert.deepEqual(loadConfig(agentDir).sync.added, ["known/model"]);
+	});
+
+	it("never adds batch variants and prunes ones an earlier sync added", async () => {
+		const agentDir = tempAgentDir();
+		const config = emptyConfig();
+		config.sync = { lastRunAt: "2026-01-01T00:00:00.000Z", added: ["openai/gpt-6.1-terra:batch"], overrides: [] };
+		saveConfig(agentDir, config);
+		writeModelsJson(agentDir, {
+			providers: {
+				openrouter: {
+					models: [
+						{ id: "openai/gpt-6.1-terra:batch", name: "OpenAI: GPT-6.1 Terra (batch)", api: "openai-completions" },
+						{ id: "openai/gpt-6.1-terra:free", name: "OpenAI: GPT-6.1 Terra (free)", api: "openai-completions" },
+						// Hand-written, so no manifest entry: a batch id is still unusable and goes too.
+						{ id: "openai/gpt-6.1-terra-pro:batch", name: "Mine", api: "openai-completions" },
+					],
+				},
+			},
+		});
+
+		const batch: UpstreamModel = { ...newUpstream, id: "openai/gpt-6.1-terra:batch", name: "OpenAI: GPT-6.1 Terra (batch)" };
+		const free: UpstreamModel = { ...newUpstream, id: "openai/gpt-6.1-terra:free", name: "OpenAI: GPT-6.1 Terra (free)" };
+		const result = await runSync({
+			agentDir,
+			registry: fakeRegistry([knownCatalogModel]),
+			fetchModels: async () => [knownUpstream, batch, free],
+		});
+
+		assert.deepEqual(result.added, ["openai/gpt-6.1-terra:free"]);
+		assert.deepEqual(result.removed.sort(), ["openai/gpt-6.1-terra-pro:batch", "openai/gpt-6.1-terra:batch"]);
+		assert.deepEqual(readModelsJson(agentDir).providers?.openrouter?.models?.map((model) => model.id), ["openai/gpt-6.1-terra:free"]);
+		assert.deepEqual(loadConfig(agentDir).sync.added, ["openai/gpt-6.1-terra:free"]);
+	});
+
+	it("hides batch variants the built-in catalog lists", () => {
+		const catalog = openRouterCatalog(
+			fakeRegistry([
+				knownCatalogModel,
+				{ ...knownCatalogModel, id: "known/model:batch", name: "Known Model (batch)" },
+			]),
+		);
+		assert.deepEqual(catalog.map((model) => model.id), ["known/model"]);
 	});
 
 	it("leaves hand-written overrides alone, even when they already match upstream", async () => {

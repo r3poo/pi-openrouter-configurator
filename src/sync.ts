@@ -6,6 +6,7 @@ import {
 	endpointCaps,
 	fetchModelProviders,
 	fetchUpstreamModels,
+	isBatchVariant,
 	OPENROUTER_API_BASE,
 	providerSlug,
 	toModelsJsonDefinition,
@@ -45,11 +46,16 @@ function clone<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** Every OpenRouter model Pi knows about, sorted for stable menus and diffs. */
+/**
+ * Every OpenRouter model Pi knows about, sorted for stable menus and diffs.
+ *
+ * Batch variants are filtered out even when the built-in catalog (or a leftover `models.json` entry)
+ * lists them: Pi only speaks `chat/completions`, so they would fail on use.
+ */
 export function openRouterCatalog(registry: { getAll(): CatalogModel[] }): CatalogModel[] {
 	return registry
 		.getAll()
-		.filter((model) => model.provider === PROVIDER_ID)
+		.filter((model) => model.provider === PROVIDER_ID && !isBatchVariant(model.id))
 		.sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -182,11 +188,21 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 	};
 }
 
-/** Drop overlay entries the previous sync wrote that no longer exist upstream. */
+/**
+ * Drop overlay entries that must not stay in the catalog: our own entries that no longer exist
+ * upstream, plus every batch variant.
+ *
+ * Batch entries are removed even when they are not in our manifest — a `:batch` model cannot be
+ * called through `chat/completions`, so keeping it only lists a model that fails on use. Entries
+ * we added earlier (before the filter existed) are covered by both rules.
+ */
 function pruneStale(section: { models?: { id: string }[]; modelOverrides?: Record<string, unknown> }, config: PluginConfig, seen: Set<string>): string[] {
 	const removed: string[] = [];
 
-	const staleModels = new Set(config.sync.added.filter((id) => !seen.has(id)));
+	const staleModels = new Set<string>(config.sync.added.filter((id) => !seen.has(id)));
+	for (const entry of section.models ?? []) {
+		if (isBatchVariant(entry.id)) staleModels.add(entry.id);
+	}
 	if (staleModels.size > 0 && section.models) {
 		section.models = section.models.filter((entry) => !staleModels.has(entry.id));
 		if (section.models.length === 0) delete section.models;
@@ -198,7 +214,7 @@ function pruneStale(section: { models?: { id: string }[]; modelOverrides?: Recor
 		if (Object.keys(section.modelOverrides).length === 0) delete section.modelOverrides;
 	}
 
-	for (const id of staleModels) removed.push(id);
+	for (const id of staleModels) if (!removed.includes(id)) removed.push(id);
 	for (const id of staleOverrides) if (!staleModels.has(id)) removed.push(id);
 	return removed;
 }

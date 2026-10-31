@@ -160,6 +160,15 @@ function round(value: number): number {
 	return Number(value.toFixed(6));
 }
 
+/**
+ * OpenRouter's batch tier is published as a `:batch` variant of the same model (`openai/gpt-6.1-terra:batch`).
+ * It only accepts asynchronous job submissions, which Pi never makes, so listing it would give the user a
+ * model that fails on the first message. Plain `:free` and other suffixes stay eligible.
+ */
+export function isBatchVariant(id: string): boolean {
+	return /:batch$/i.test(id);
+}
+
 export function isChatModel(model: UpstreamModel): boolean {
 	const outputs = model.architecture?.output_modalities;
 	if (!outputs || outputs.length === 0) return true;
@@ -174,7 +183,7 @@ export function isExpired(model: UpstreamModel, now = Date.now()): boolean {
 
 /** Map an upstream catalog entry onto the metadata Pi cares about. */
 export function desiredFromUpstream(model: UpstreamModel): DesiredModel | undefined {
-	if (!model.id || !isChatModel(model)) return undefined;
+	if (!model.id || isBatchVariant(model.id) || !isChatModel(model)) return undefined;
 
 	const modalities = model.architecture?.input_modalities ?? ["text"];
 	const input: ("text" | "image")[] = ["text"];
